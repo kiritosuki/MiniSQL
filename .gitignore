@@ -1,0 +1,12 @@
+build/
+build-*/
+data/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+minisql
+minisqld
+minisql_tests
+.DS_Store

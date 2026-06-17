@@ -12,7 +12,7 @@ Engine::Engine(const std::filesystem::path& data_dir) : storage_(data_dir) {
 }
 
 bool Engine::require_database(ResultSet& result) const {
-    if (current_database_.empty()) {
+    if (!current_database_) {
         result.ok = false;
         result.message = "no database selected";
         return false;
@@ -58,8 +58,8 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
             return result;
         case StatementType::DropDatabase:
             result.ok = storage_.drop_database(stmt.database, error);
-            if (result.ok && current_database_ == stmt.database) {
-                current_database_.clear();
+            if (result.ok && current_database_ && current_database_->name() == stmt.database) {
+                clear_current_database();
             }
             result.message = result.ok ? "database dropped" : error;
             return result;
@@ -68,7 +68,7 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
                 result.ok = false;
                 result.message = "database does not exist";
             } else {
-                current_database_ = stmt.database;
+                select_database(stmt.database);
                 result.message = "database changed";
             }
             return result;
@@ -77,19 +77,19 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
             Table table;
             table.name = stmt.table;
             table.columns = stmt.columns;
-            result.ok = storage_.create_table(current_database_, table, error);
+            result.ok = current_database_->create_table(table, error);
             result.message = result.ok ? "table created" : error;
             return result;
         }
         case StatementType::DropTable:
             if (!require_database(result)) return result;
-            result.ok = storage_.drop_table(current_database_, stmt.table, error);
+            result.ok = current_database_->drop_table(stmt.table, error);
             result.message = result.ok ? "table dropped" : error;
             return result;
         case StatementType::Insert: {
             if (!require_database(result)) return result;
             Table table;
-            if (!storage_.load_table(current_database_, stmt.table, table, error)) {
+            if (!current_database_->load_table(stmt.table, table, error)) {
                 result.ok = false;
                 result.message = error;
                 return result;
@@ -114,14 +114,14 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
                 result.message = error;
                 return result;
             }
-            storage_.save_table(current_database_, table, error);
+            current_database_->save_table(table, error);
             result.message = "1 row inserted";
             return result;
         }
         case StatementType::Select: {
             if (!require_database(result)) return result;
             Table table;
-            if (!storage_.load_table(current_database_, stmt.table, table, error)) {
+            if (!current_database_->load_table(stmt.table, table, error)) {
                 result.ok = false;
                 result.message = error;
                 return result;
@@ -140,7 +140,7 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
         case StatementType::DeleteRows: {
             if (!require_database(result)) return result;
             Table table;
-            if (!storage_.load_table(current_database_, stmt.table, table, error)) {
+            if (!current_database_->load_table(stmt.table, table, error)) {
                 result.ok = false;
                 result.message = error;
                 return result;
@@ -155,14 +155,14 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
                 }
             }
             std::size_t count = table.delete_rows(cond);
-            storage_.save_table(current_database_, table, error);
+            current_database_->save_table(table, error);
             result.message = std::to_string(count) + " row(s) deleted";
             return result;
         }
         case StatementType::Update: {
             if (!require_database(result)) return result;
             Table table;
-            if (!storage_.load_table(current_database_, stmt.table, table, error)) {
+            if (!current_database_->load_table(stmt.table, table, error)) {
                 result.ok = false;
                 result.message = error;
                 return result;
@@ -194,7 +194,7 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
                 result.message = error;
                 return result;
             }
-            storage_.save_table(current_database_, table, error);
+            current_database_->save_table(table, error);
             result.message = std::to_string(count) + " row(s) updated";
             return result;
         }
@@ -214,8 +214,8 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
         }
         case StatementType::ShowTables: {
             if (!require_database(result)) return result;
-            result.columns.push_back("Tables_in_" + current_database_);
-            Array<std::string> names = storage_.list_tables(current_database_);
+            result.columns.push_back("Tables_in_" + current_database_->name());
+            Array<std::string> names = current_database_->list_tables();
             for (const std::string& name : names) {
                 Row row;
                 Value value;
@@ -235,6 +235,14 @@ ResultSet Engine::execute_statement(const Statement& stmt) {
             result.message = "unsupported statement";
             return result;
     }
+}
+
+void Engine::clear_current_database() {
+    current_database_.reset();
+}
+
+void Engine::select_database(const std::string& name) {
+    current_database_ = std::make_unique<Database>(storage_, name);
 }
 
 std::string serialize_result(const ResultSet& result) {

@@ -14,6 +14,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 add_library(minisql_core
+  src/database.cpp
   src/engine.cpp
   src/sql_parser.cpp
   src/storage.cpp

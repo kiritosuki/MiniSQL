@@ -51,13 +51,57 @@ struct IndexEntry {
 
 class BPlusTreeIndex {
 public:
+    BPlusTreeIndex() = default;
+    BPlusTreeIndex(const BPlusTreeIndex& other);
+    BPlusTreeIndex(BPlusTreeIndex&& other) noexcept;
+    ~BPlusTreeIndex();
+
+    BPlusTreeIndex& operator=(const BPlusTreeIndex& other);
+    BPlusTreeIndex& operator=(BPlusTreeIndex&& other) noexcept;
+
     bool insert(const Value& key, std::size_t row_id);
     bool remove(const Value& key);
     bool find(const Value& key, std::size_t& row_id) const;
-    void clear() { entries_.clear(); }
+    void clear();
 
 private:
-    Array<IndexEntry> entries_;
+    struct Node {
+        bool leaf = true;
+        Array<Value> keys;
+        Array<Node*> children;
+        Array<std::size_t> values;
+        Node* next = nullptr;
+    };
+
+    struct SplitResult {
+        bool split = false;
+        Value pivot;
+        Node* right = nullptr;
+    };
+
+    struct RemoveResult {
+        bool removed = false;
+    };
+
+    static constexpr std::size_t kMaxKeys = 4;
+    static constexpr std::size_t kMinKeys = 2;
+
+    [[nodiscard]] Node* clone_tree(const Node* node, Node*& previous_leaf, Node*& first_leaf) const;
+    void destroy_tree(Node* node);
+    [[nodiscard]] Node* find_leaf(const Value& key) const;
+    [[nodiscard]] SplitResult insert_recursive(Node* node, const Value& key, std::size_t row_id);
+    [[nodiscard]] SplitResult split_leaf(Node* leaf);
+    [[nodiscard]] SplitResult split_internal(Node* node);
+    [[nodiscard]] bool is_underflow(const Node* node) const;
+    [[nodiscard]] Value subtree_first_key(const Node* node) const;
+    [[nodiscard]] Node* leftmost_leaf(Node* node) const;
+    void rebuild_internal_keys(Node* node);
+    void rebuild_all_internal_keys(Node* node);
+    void copy_from(const BPlusTreeIndex& other);
+    void collect_entries(const Node* node, Array<IndexEntry>& entries) const;
+
+    Node* root_ = nullptr;
+    Node* leaf_head_ = nullptr;
 };
 
 int compare_values(const Value& left, const Value& right);

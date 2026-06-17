@@ -23,52 +23,526 @@ int compare_values(const Value& left, const Value& right) {
 }
 
 bool BPlusTreeIndex::insert(const Value& key, std::size_t row_id) {
-    std::size_t pos = 0;
-    while (pos < entries_.size() && compare_values(entries_[pos].key, key) < 0) {
-        ++pos;
+    if (root_ == nullptr) {
+        root_ = new Node();
+        root_->leaf = true;
+        root_->keys.push_back(key);
+        root_->values.push_back(row_id);
+        leaf_head_ = root_;
+        return true;
     }
-    if (pos < entries_.size() && compare_values(entries_[pos].key, key) == 0) {
+
+    std::size_t existing = 0;
+    if (find(key, existing)) {
         return false;
     }
-    Array<IndexEntry> next;
-    for (std::size_t i = 0; i < pos; ++i) {
-        next.push_back(entries_[i]);
+
+    SplitResult split = insert_recursive(root_, key, row_id);
+    if (split.split) {
+        Node* next_root = new Node();
+        next_root->leaf = false;
+        next_root->keys.push_back(split.pivot);
+        next_root->children.push_back(root_);
+        next_root->children.push_back(split.right);
+        root_ = next_root;
     }
-    next.push_back(IndexEntry{key, row_id});
-    for (std::size_t i = pos; i < entries_.size(); ++i) {
-        next.push_back(entries_[i]);
-    }
-    entries_ = std::move(next);
     return true;
 }
 
 bool BPlusTreeIndex::remove(const Value& key) {
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        if (compare_values(entries_[i].key, key) == 0) {
-            entries_.erase(i);
+    if (root_ == nullptr) {
+        return false;
+    }
+
+    Array<Node*> path;
+    Array<std::size_t> child_indices;
+
+    Node* node = root_;
+    while (node != nullptr && !node->leaf) {
+        std::size_t child = 0;
+        while (child < node->keys.size() && compare_values(key, node->keys[child]) >= 0) {
+            ++child;
+        }
+        path.push_back(node);
+        child_indices.push_back(child);
+        node = node->children[child];
+    }
+
+    if (node == nullptr) {
+        return false;
+    }
+
+    std::size_t pos = 0;
+    while (pos < node->keys.size() && compare_values(node->keys[pos], key) < 0) {
+        ++pos;
+    }
+    if (pos >= node->keys.size() || compare_values(node->keys[pos], key) != 0) {
+        return false;
+    }
+
+    node->keys.erase(pos);
+    node->values.erase(pos);
+
+    if (node == root_) {
+        if (root_->leaf && root_->keys.empty()) {
+            delete root_;
+            root_ = nullptr;
+            leaf_head_ = nullptr;
+        } else {
+            rebuild_all_internal_keys(root_);
+        }
+        return true;
+    }
+
+    for (std::size_t level = path.size(); level > 0; --level) {
+        Node* parent = path[level - 1];
+        std::size_t child_index = child_indices[level - 1];
+        Node* child = parent->children[child_index];
+
+        if (!is_underflow(child)) {
+            rebuild_internal_keys(parent);
+            continue;
+        }
+
+        Node* left = child_index > 0 ? parent->children[child_index - 1] : nullptr;
+        Node* right = child_index + 1 < parent->children.size() ? parent->children[child_index + 1] : nullptr;
+
+        if (child->leaf) {
+            if (left != nullptr && left->keys.size() > kMinKeys) {
+                Array<Value> next_keys;
+                Array<std::size_t> next_values;
+                next_keys.push_back(left->keys[left->keys.size() - 1]);
+                next_values.push_back(left->values[left->values.size() - 1]);
+                for (std::size_t i = 0; i < child->keys.size(); ++i) {
+                    next_keys.push_back(child->keys[i]);
+                    next_values.push_back(child->values[i]);
+                }
+                left->keys.erase(left->keys.size() - 1);
+                left->values.erase(left->values.size() - 1);
+                child->keys = std::move(next_keys);
+                child->values = std::move(next_values);
+                rebuild_internal_keys(parent);
+                continue;
+            }
+
+            if (right != nullptr && right->keys.size() > kMinKeys) {
+                child->keys.push_back(right->keys[0]);
+                child->values.push_back(right->values[0]);
+                right->keys.erase(0);
+                right->values.erase(0);
+                rebuild_internal_keys(parent);
+                continue;
+            }
+
+            if (left != nullptr) {
+                for (std::size_t i = 0; i < child->keys.size(); ++i) {
+                    left->keys.push_back(child->keys[i]);
+                    left->values.push_back(child->values[i]);
+                }
+                left->next = child->next;
+                parent->children.erase(child_index);
+                parent->keys.erase(child_index - 1);
+                if (leaf_head_ == child) {
+                    leaf_head_ = left;
+                }
+                delete child;
+            } else if (right != nullptr) {
+                for (std::size_t i = 0; i < right->keys.size(); ++i) {
+                    child->keys.push_back(right->keys[i]);
+                    child->values.push_back(right->values[i]);
+                }
+                child->next = right->next;
+                parent->children.erase(child_index + 1);
+                parent->keys.erase(child_index);
+                if (leaf_head_ == right) {
+                    leaf_head_ = child;
+                }
+                delete right;
+            }
+        } else {
+            if (left != nullptr && left->children.size() > kMinKeys + 1) {
+                Array<Value> next_keys;
+                Array<Node*> next_children;
+
+                next_children.push_back(left->children[left->children.size() - 1]);
+                for (std::size_t i = 0; i < child->children.size(); ++i) {
+                    next_children.push_back(child->children[i]);
+                }
+
+                next_keys.push_back(parent->keys[child_index - 1]);
+                for (std::size_t i = 0; i < child->keys.size(); ++i) {
+                    next_keys.push_back(child->keys[i]);
+                }
+
+                parent->keys[child_index - 1] = left->keys[left->keys.size() - 1];
+                left->children.erase(left->children.size() - 1);
+                left->keys.erase(left->keys.size() - 1);
+                child->children = std::move(next_children);
+                child->keys = std::move(next_keys);
+                rebuild_internal_keys(parent);
+                continue;
+            }
+
+            if (right != nullptr && right->children.size() > kMinKeys + 1) {
+                child->keys.push_back(parent->keys[child_index]);
+                child->children.push_back(right->children[0]);
+                parent->keys[child_index] = right->keys[0];
+                right->children.erase(0);
+                right->keys.erase(0);
+                rebuild_internal_keys(parent);
+                continue;
+            }
+
+            if (left != nullptr) {
+                left->keys.push_back(parent->keys[child_index - 1]);
+                for (std::size_t i = 0; i < child->keys.size(); ++i) {
+                    left->keys.push_back(child->keys[i]);
+                }
+                for (Node* grandchild : child->children) {
+                    left->children.push_back(grandchild);
+                }
+                parent->children.erase(child_index);
+                parent->keys.erase(child_index - 1);
+                delete child;
+                rebuild_internal_keys(left);
+            } else if (right != nullptr) {
+                child->keys.push_back(parent->keys[child_index]);
+                for (std::size_t i = 0; i < right->keys.size(); ++i) {
+                    child->keys.push_back(right->keys[i]);
+                }
+                for (Node* grandchild : right->children) {
+                    child->children.push_back(grandchild);
+                }
+                parent->children.erase(child_index + 1);
+                parent->keys.erase(child_index);
+                delete right;
+                rebuild_internal_keys(child);
+            }
+        }
+
+        rebuild_internal_keys(parent);
+    }
+
+    if (root_ != nullptr && !root_->leaf && root_->children.size() == 1) {
+        Node* next_root = root_->children[0];
+        root_->children.clear();
+        delete root_;
+        root_ = next_root;
+    }
+    if (root_ != nullptr) {
+        rebuild_all_internal_keys(root_);
+        leaf_head_ = leftmost_leaf(root_);
+    }
+    if (root_ != nullptr && root_->leaf && root_->keys.empty()) {
+        delete root_;
+        root_ = nullptr;
+        leaf_head_ = nullptr;
+    }
+    return true;
+}
+
+bool BPlusTreeIndex::find(const Value& key, std::size_t& row_id) const {
+    Node* leaf = find_leaf(key);
+    if (leaf == nullptr) {
+        return false;
+    }
+    for (std::size_t i = 0; i < leaf->keys.size(); ++i) {
+        int cmp = compare_values(leaf->keys[i], key);
+        if (cmp == 0) {
+            row_id = leaf->values[i];
             return true;
+        }
+        if (cmp > 0) {
+            return false;
         }
     }
     return false;
 }
 
-bool BPlusTreeIndex::find(const Value& key, std::size_t& row_id) const {
-    std::size_t left = 0;
-    std::size_t right = entries_.size();
-    while (left < right) {
-        std::size_t mid = left + (right - left) / 2;
-        int cmp = compare_values(entries_[mid].key, key);
-        if (cmp == 0) {
-            row_id = entries_[mid].row_id;
-            return true;
+BPlusTreeIndex::BPlusTreeIndex(const BPlusTreeIndex& other) {
+    copy_from(other);
+}
+
+BPlusTreeIndex::BPlusTreeIndex(BPlusTreeIndex&& other) noexcept
+    : root_(other.root_), leaf_head_(other.leaf_head_) {
+    other.root_ = nullptr;
+    other.leaf_head_ = nullptr;
+}
+
+BPlusTreeIndex::~BPlusTreeIndex() {
+    clear();
+}
+
+BPlusTreeIndex& BPlusTreeIndex::operator=(const BPlusTreeIndex& other) {
+    if (this != &other) {
+        clear();
+        copy_from(other);
+    }
+    return *this;
+}
+
+BPlusTreeIndex& BPlusTreeIndex::operator=(BPlusTreeIndex&& other) noexcept {
+    if (this != &other) {
+        clear();
+        root_ = other.root_;
+        leaf_head_ = other.leaf_head_;
+        other.root_ = nullptr;
+        other.leaf_head_ = nullptr;
+    }
+    return *this;
+}
+
+void BPlusTreeIndex::clear() {
+    destroy_tree(root_);
+    root_ = nullptr;
+    leaf_head_ = nullptr;
+}
+
+BPlusTreeIndex::Node* BPlusTreeIndex::clone_tree(const Node* node, Node*& previous_leaf, Node*& first_leaf) const {
+    if (node == nullptr) {
+        return nullptr;
+    }
+
+    Node* copy = new Node();
+    copy->leaf = node->leaf;
+    for (const Value& key : node->keys) {
+        copy->keys.push_back(key);
+    }
+
+    if (node->leaf) {
+        for (std::size_t value : node->values) {
+            copy->values.push_back(value);
         }
-        if (cmp < 0) {
-            left = mid + 1;
+        if (previous_leaf != nullptr) {
+            previous_leaf->next = copy;
         } else {
-            right = mid;
+            first_leaf = copy;
+        }
+        previous_leaf = copy;
+        return copy;
+    }
+
+    for (Node* child : node->children) {
+        copy->children.push_back(clone_tree(child, previous_leaf, first_leaf));
+    }
+    return copy;
+}
+
+void BPlusTreeIndex::destroy_tree(Node* node) {
+    if (node == nullptr) {
+        return;
+    }
+    if (!node->leaf) {
+        for (Node* child : node->children) {
+            destroy_tree(child);
         }
     }
-    return false;
+    delete node;
+}
+
+BPlusTreeIndex::Node* BPlusTreeIndex::find_leaf(const Value& key) const {
+    Node* node = root_;
+    while (node != nullptr && !node->leaf) {
+        std::size_t child = 0;
+        while (child < node->keys.size() && compare_values(key, node->keys[child]) >= 0) {
+            ++child;
+        }
+        node = node->children[child];
+    }
+    return node;
+}
+
+BPlusTreeIndex::SplitResult BPlusTreeIndex::insert_recursive(Node* node, const Value& key, std::size_t row_id) {
+    if (node->leaf) {
+        std::size_t pos = 0;
+        while (pos < node->keys.size() && compare_values(node->keys[pos], key) < 0) {
+            ++pos;
+        }
+
+        Array<Value> next_keys;
+        Array<std::size_t> next_values;
+        for (std::size_t i = 0; i < pos; ++i) {
+            next_keys.push_back(node->keys[i]);
+            next_values.push_back(node->values[i]);
+        }
+        next_keys.push_back(key);
+        next_values.push_back(row_id);
+        for (std::size_t i = pos; i < node->keys.size(); ++i) {
+            next_keys.push_back(node->keys[i]);
+            next_values.push_back(node->values[i]);
+        }
+        node->keys = std::move(next_keys);
+        node->values = std::move(next_values);
+
+        if (node->keys.size() <= kMaxKeys) {
+            return {};
+        }
+        return split_leaf(node);
+    }
+
+    std::size_t child = 0;
+    while (child < node->keys.size() && compare_values(key, node->keys[child]) >= 0) {
+        ++child;
+    }
+
+    SplitResult child_split = insert_recursive(node->children[child], key, row_id);
+    if (!child_split.split) {
+        return {};
+    }
+
+    Array<Value> next_keys;
+    Array<Node*> next_children;
+    for (std::size_t i = 0; i < child; ++i) {
+        next_keys.push_back(node->keys[i]);
+    }
+    next_keys.push_back(child_split.pivot);
+    for (std::size_t i = child; i < node->keys.size(); ++i) {
+        next_keys.push_back(node->keys[i]);
+    }
+
+    for (std::size_t i = 0; i <= child; ++i) {
+        next_children.push_back(node->children[i]);
+    }
+    next_children.push_back(child_split.right);
+    for (std::size_t i = child + 1; i < node->children.size(); ++i) {
+        next_children.push_back(node->children[i]);
+    }
+
+    node->keys = std::move(next_keys);
+    node->children = std::move(next_children);
+
+    if (node->keys.size() <= kMaxKeys) {
+        return {};
+    }
+    return split_internal(node);
+}
+
+BPlusTreeIndex::SplitResult BPlusTreeIndex::split_leaf(Node* leaf) {
+    Node* right = new Node();
+    right->leaf = true;
+
+    std::size_t mid = leaf->keys.size() / 2;
+    Array<Value> left_keys;
+    Array<std::size_t> left_values;
+
+    for (std::size_t i = 0; i < mid; ++i) {
+        left_keys.push_back(leaf->keys[i]);
+        left_values.push_back(leaf->values[i]);
+    }
+    for (std::size_t i = mid; i < leaf->keys.size(); ++i) {
+        right->keys.push_back(leaf->keys[i]);
+        right->values.push_back(leaf->values[i]);
+    }
+
+    leaf->keys = std::move(left_keys);
+    leaf->values = std::move(left_values);
+    right->next = leaf->next;
+    leaf->next = right;
+
+    SplitResult result;
+    result.split = true;
+    result.pivot = right->keys[0];
+    result.right = right;
+    return result;
+}
+
+BPlusTreeIndex::SplitResult BPlusTreeIndex::split_internal(Node* node) {
+    Node* right = new Node();
+    right->leaf = false;
+
+    std::size_t mid = node->keys.size() / 2;
+    Value pivot = node->keys[mid];
+
+    Array<Value> left_keys;
+    Array<Node*> left_children;
+
+    for (std::size_t i = 0; i < mid; ++i) {
+        left_keys.push_back(node->keys[i]);
+    }
+    for (std::size_t i = mid + 1; i < node->keys.size(); ++i) {
+        right->keys.push_back(node->keys[i]);
+    }
+    for (std::size_t i = 0; i <= mid; ++i) {
+        left_children.push_back(node->children[i]);
+    }
+    for (std::size_t i = mid + 1; i < node->children.size(); ++i) {
+        right->children.push_back(node->children[i]);
+    }
+
+    node->keys = std::move(left_keys);
+    node->children = std::move(left_children);
+
+    SplitResult result;
+    result.split = true;
+    result.pivot = pivot;
+    result.right = right;
+    return result;
+}
+
+bool BPlusTreeIndex::is_underflow(const Node* node) const {
+    if (node == nullptr || node == root_) {
+        return false;
+    }
+    return node->keys.size() < kMinKeys;
+}
+
+Value BPlusTreeIndex::subtree_first_key(const Node* node) const {
+    const Node* current = node;
+    while (current != nullptr && !current->leaf) {
+        current = current->children[0];
+    }
+    return current->keys[0];
+}
+
+BPlusTreeIndex::Node* BPlusTreeIndex::leftmost_leaf(Node* node) const {
+    Node* current = node;
+    while (current != nullptr && !current->leaf) {
+        current = current->children[0];
+    }
+    return current;
+}
+
+void BPlusTreeIndex::rebuild_internal_keys(Node* node) {
+    if (node == nullptr || node->leaf) {
+        return;
+    }
+    Array<Value> next_keys;
+    for (std::size_t i = 1; i < node->children.size(); ++i) {
+        next_keys.push_back(subtree_first_key(node->children[i]));
+    }
+    node->keys = std::move(next_keys);
+}
+
+void BPlusTreeIndex::rebuild_all_internal_keys(Node* node) {
+    if (node == nullptr || node->leaf) {
+        return;
+    }
+    for (Node* child : node->children) {
+        rebuild_all_internal_keys(child);
+    }
+    rebuild_internal_keys(node);
+}
+
+void BPlusTreeIndex::copy_from(const BPlusTreeIndex& other) {
+    Node* previous_leaf = nullptr;
+    Node* first_leaf = nullptr;
+    root_ = clone_tree(other.root_, previous_leaf, first_leaf);
+    leaf_head_ = first_leaf;
+}
+
+void BPlusTreeIndex::collect_entries(const Node* node, Array<IndexEntry>& entries) const {
+    if (node == nullptr) {
+        return;
+    }
+    if (node->leaf) {
+        for (std::size_t i = 0; i < node->keys.size(); ++i) {
+            entries.push_back(IndexEntry{node->keys[i], node->values[i]});
+        }
+        return;
+    }
+    for (Node* child : node->children) {
+        collect_entries(child, entries);
+    }
 }
 
 int Table::column_index(const std::string& column_name) const {

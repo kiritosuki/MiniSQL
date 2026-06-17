@@ -1,4 +1,4 @@
-#include "minisql/net.hpp"
+#include "net.hpp"
 
 #include <arpa/inet.h>
 #include <cerrno>

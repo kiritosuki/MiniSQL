@@ -1,6 +1,6 @@
-#include "minisql/storage.hpp"
+#include "storage.hpp"
 
-#include "minisql/util.hpp"
+#include "util.hpp"
 
 #include <fstream>
 

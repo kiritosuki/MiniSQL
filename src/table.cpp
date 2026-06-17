@@ -1,4 +1,4 @@
-#include "minisql/table.hpp"
+#include "table.hpp"
 
 #include <cstdlib>
 

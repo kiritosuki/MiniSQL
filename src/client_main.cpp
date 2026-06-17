@@ -1,6 +1,6 @@
-#include "minisql/engine.hpp"
-#include "minisql/net.hpp"
-#include "minisql/util.hpp"
+#include "engine.hpp"
+#include "net.hpp"
+#include "util.hpp"
 
 #include <iostream>
 #include <string>

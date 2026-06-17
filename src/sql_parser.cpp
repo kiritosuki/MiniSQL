@@ -1,6 +1,6 @@
-#include "minisql/sql_parser.hpp"
+#include "sql_parser.hpp"
 
-#include "minisql/util.hpp"
+#include "util.hpp"
 
 #include <cctype>
 #include <cstdlib>

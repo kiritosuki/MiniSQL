@@ -1,4 +1,4 @@
-#include "minisql/engine.hpp"
+#include "engine.hpp"
 
 #include <cstdlib>
 #include <filesystem>

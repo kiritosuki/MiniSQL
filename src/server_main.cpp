@@ -1,5 +1,5 @@
-#include "minisql/engine.hpp"
-#include "minisql/net.hpp"
+#include "engine.hpp"
+#include "net.hpp"
 
 #include <csignal>
 #include <cstdlib>

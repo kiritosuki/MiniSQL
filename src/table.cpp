@@ -711,11 +711,22 @@ bool Table::matches(const Row& row, const Condition& condition) const {
 }
 
 std::size_t Table::delete_rows(const Condition& condition) {
-    std::size_t indexed = 0;
-    if (indexed_row(condition, indexed)) {
-        rows.erase(indexed);
+    Array<std::size_t> indexed_ids;
+    if (indexed_rows(condition, indexed_ids)) {
+        std::size_t count = 0;
+        while (!indexed_ids.empty()) {
+            std::size_t max_pos = 0;
+            for (std::size_t i = 1; i < indexed_ids.size(); ++i) {
+                if (indexed_ids[i] > indexed_ids[max_pos]) {
+                    max_pos = i;
+                }
+            }
+            rows.erase(indexed_ids[max_pos]);
+            indexed_ids.erase(max_pos);
+            ++count;
+        }
         rebuild_index();
-        return 1;
+        return count;
     }
     std::size_t count = 0;
     for (std::size_t i = 0; i < rows.size();) {
@@ -736,25 +747,39 @@ std::size_t Table::update_rows(const std::string& column, const Value& value, co
         error = "unknown column: " + column;
         return 0;
     }
+    Array<std::size_t> indexed_ids;
+    bool has_indexed_rows = indexed_rows(condition, indexed_ids);
     int pidx = primary_index();
     if (idx == pidx) {
-        for (std::size_t i = 0; i < rows.size(); ++i) {
-            if (!matches(rows[i], condition)) {
-                continue;
+        if (has_indexed_rows) {
+            for (std::size_t row_id : indexed_ids) {
+                for (std::size_t j = 0; j < rows.size(); ++j) {
+                    if (row_id != j && compare_values(rows[j].values[static_cast<std::size_t>(pidx)], value) == 0) {
+                        error = "duplicate primary key";
+                        return 0;
+                    }
+                }
             }
-            for (std::size_t j = 0; j < rows.size(); ++j) {
-                if (i != j && compare_values(rows[j].values[static_cast<std::size_t>(pidx)], value) == 0) {
-                    error = "duplicate primary key";
-                    return 0;
+        } else {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (!matches(rows[i], condition)) {
+                    continue;
+                }
+                for (std::size_t j = 0; j < rows.size(); ++j) {
+                    if (i != j && compare_values(rows[j].values[static_cast<std::size_t>(pidx)], value) == 0) {
+                        error = "duplicate primary key";
+                        return 0;
+                    }
                 }
             }
         }
     }
-    std::size_t indexed = 0;
-    if (indexed_row(condition, indexed)) {
-        rows[indexed].values[static_cast<std::size_t>(idx)] = value;
+    if (has_indexed_rows) {
+        for (std::size_t row_id : indexed_ids) {
+            rows[row_id].values[static_cast<std::size_t>(idx)] = value;
+        }
         rebuild_index();
-        return 1;
+        return indexed_ids.size();
     }
     std::size_t count = 0;
     for (std::size_t i = 0; i < rows.size(); ++i) {

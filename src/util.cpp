@@ -29,8 +29,14 @@ bool valid_identifier(const std::string& name) {
     if (name.empty()) {
         return false;
     }
-    for (char ch : name) {
-        if (ch < 'a' || ch > 'z') {
+    if (name[0] < 'a' || name[0] > 'z') {
+        return false;
+    }
+    for (std::size_t i = 1; i < name.size(); ++i) {
+        char ch = name[i];
+        bool lower = ch >= 'a' && ch <= 'z';
+        bool digit = ch >= '0' && ch <= '9';
+        if (!lower && !digit) {
             return false;
         }
     }

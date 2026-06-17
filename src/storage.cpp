@@ -128,6 +128,54 @@ static Array<std::string> split_storage_line(const std::string& line) {
     return parts;
 }
 
+static bool load_index_entries(const std::filesystem::path& path,
+                               const Table& table,
+                               Array<IndexEntry>& entries,
+                               std::string& error) {
+    int pidx = table.primary_index();
+    if (pidx < 0) {
+        return true;
+    }
+
+    std::ifstream in(path);
+    if (!in) {
+        return false;
+    }
+
+    std::string line;
+    if (!std::getline(in, line) || line != "MINISQL_INDEX_V1") {
+        error = "invalid index file";
+        return false;
+    }
+    if (!std::getline(in, line) || line != table.columns[static_cast<std::size_t>(pidx)].name) {
+        error = "invalid index file";
+        return false;
+    }
+
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        Array<std::string> parts = split_storage_line(line);
+        if (parts.size() != 2) {
+            error = "invalid index file";
+            return false;
+        }
+
+        IndexEntry entry;
+        entry.key.type = table.columns[static_cast<std::size_t>(pidx)].type;
+        if (entry.key.type == ColumnType::Int) {
+            entry.key.int_value = std::stoi(parts[0]);
+        } else {
+            entry.key.string_value = parts[0];
+        }
+        entry.row_id = static_cast<std::size_t>(std::stoul(parts[1]));
+        entries.push_back(entry);
+    }
+
+    return true;
+}
+
 bool Storage::load_table(const std::string& database, const std::string& table_name, Table& table, std::string& error) const {
     std::ifstream in(table_path(database, table_name));
     if (!in) {
@@ -190,7 +238,23 @@ bool Storage::load_table(const std::string& database, const std::string& table_n
         }
         loaded.rows.push_back(row);
     }
-    loaded.rebuild_index();
+    Array<IndexEntry> entries;
+    std::filesystem::path index_path = database_path(database) / (table_name + ".idx");
+    bool loaded_index = false;
+    if (loaded.primary_index() >= 0 && std::filesystem::exists(index_path)) {
+        loaded_index = load_index_entries(index_path, loaded, entries, error);
+        if (!loaded_index && error == "invalid index file") {
+            return false;
+        }
+    }
+
+    if (loaded.primary_index() >= 0 && loaded_index) {
+        if (!loaded.load_primary_index(entries, error)) {
+            return false;
+        }
+    } else {
+        loaded.rebuild_index();
+    }
     table = loaded;
     return true;
 }

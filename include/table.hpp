@@ -62,6 +62,8 @@ public:
     bool insert(const Value& key, std::size_t row_id);
     bool remove(const Value& key);
     bool find(const Value& key, std::size_t& row_id) const;
+    void collect_less_than(const Value& key, Array<std::size_t>& row_ids) const;
+    void collect_greater_than(const Value& key, Array<std::size_t>& row_ids) const;
     void clear();
 
 private:
@@ -117,7 +119,9 @@ public:
     [[nodiscard]] bool has_primary() const;
     [[nodiscard]] const Column* find_column(const std::string& column_name) const;
     [[nodiscard]] bool indexed_row(const Condition& condition, std::size_t& row_id) const;
+    [[nodiscard]] bool indexed_rows(const Condition& condition, Array<std::size_t>& row_ids) const;
     void rebuild_index();
+    bool load_primary_index(const Array<IndexEntry>& entries, std::string& error);
     [[nodiscard]] bool primary_exists(const Value& value) const;
     bool insert_row(const Row& row, std::string& error);
     [[nodiscard]] bool matches(const Row& row, const Condition& condition) const;

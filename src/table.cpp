@@ -259,6 +259,38 @@ bool BPlusTreeIndex::find(const Value& key, std::size_t& row_id) const {
     return false;
 }
 
+void BPlusTreeIndex::collect_less_than(const Value& key, Array<std::size_t>& row_ids) const {
+    for (Node* leaf = leaf_head_; leaf != nullptr; leaf = leaf->next) {
+        for (std::size_t i = 0; i < leaf->keys.size(); ++i) {
+            if (compare_values(leaf->keys[i], key) < 0) {
+                row_ids.push_back(leaf->values[i]);
+            } else {
+                return;
+            }
+        }
+    }
+}
+
+void BPlusTreeIndex::collect_greater_than(const Value& key, Array<std::size_t>& row_ids) const {
+    Node* leaf = find_leaf(key);
+    if (leaf == nullptr) {
+        return;
+    }
+
+    bool started = false;
+    for (Node* current = leaf; current != nullptr; current = current->next) {
+        for (std::size_t i = 0; i < current->keys.size(); ++i) {
+            int cmp = compare_values(current->keys[i], key);
+            if (cmp > 0) {
+                row_ids.push_back(current->values[i]);
+                started = true;
+            } else if (started) {
+                continue;
+            }
+        }
+    }
+}
+
 BPlusTreeIndex::BPlusTreeIndex(const BPlusTreeIndex& other) {
     copy_from(other);
 }
@@ -580,6 +612,30 @@ bool Table::indexed_row(const Condition& condition, std::size_t& row_id) const {
     return primary_index_.find(condition.value, row_id);
 }
 
+bool Table::indexed_rows(const Condition& condition, Array<std::size_t>& row_ids) const {
+    int pidx = primary_index();
+    if (!condition.enabled || pidx < 0 || columns[static_cast<std::size_t>(pidx)].name != condition.column) {
+        return false;
+    }
+
+    if (condition.op == '=') {
+        std::size_t row_id = 0;
+        if (primary_index_.find(condition.value, row_id)) {
+            row_ids.push_back(row_id);
+        }
+        return true;
+    }
+    if (condition.op == '<') {
+        primary_index_.collect_less_than(condition.value, row_ids);
+        return true;
+    }
+    if (condition.op == '>') {
+        primary_index_.collect_greater_than(condition.value, row_ids);
+        return true;
+    }
+    return false;
+}
+
 void Table::rebuild_index() {
     primary_index_.clear();
     int pidx = primary_index();
@@ -589,6 +645,34 @@ void Table::rebuild_index() {
     for (std::size_t i = 0; i < rows.size(); ++i) {
         primary_index_.insert(rows[i].values[static_cast<std::size_t>(pidx)], i);
     }
+}
+
+bool Table::load_primary_index(const Array<IndexEntry>& entries, std::string& error) {
+    primary_index_.clear();
+    int pidx = primary_index();
+    if (pidx < 0) {
+        return true;
+    }
+
+    for (const IndexEntry& entry : entries) {
+        if (entry.row_id >= rows.size()) {
+            error = "invalid index file";
+            primary_index_.clear();
+            return false;
+        }
+        const Value& row_key = rows[entry.row_id].values[static_cast<std::size_t>(pidx)];
+        if (compare_values(row_key, entry.key) != 0) {
+            error = "invalid index file";
+            primary_index_.clear();
+            return false;
+        }
+        if (!primary_index_.insert(entry.key, entry.row_id)) {
+            error = "invalid index file";
+            primary_index_.clear();
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Table::primary_exists(const Value& value) const {
@@ -699,19 +783,21 @@ ResultSet Table::select_rows(const std::string& column, const Condition& conditi
         }
         result.columns.push_back(column);
     }
-    std::size_t indexed = 0;
-    if (indexed_row(condition, indexed)) {
-        const Row& source = rows[indexed];
-        Row out;
-        if (column == "*") {
-            for (const Value& value : source.values) {
-                out.values.push_back(value);
+    Array<std::size_t> indexed_ids;
+    if (indexed_rows(condition, indexed_ids)) {
+        for (std::size_t row_id : indexed_ids) {
+            const Row& source = rows[row_id];
+            Row out;
+            if (column == "*") {
+                for (const Value& value : source.values) {
+                    out.values.push_back(value);
+                }
+            } else {
+                out.values.push_back(source.values[static_cast<std::size_t>(selected)]);
             }
-        } else {
-            out.values.push_back(source.values[static_cast<std::size_t>(selected)]);
+            result.rows.push_back(out);
         }
-        result.rows.push_back(out);
-        result.message = "1 row(s)";
+        result.message = std::to_string(result.rows.size()) + " row(s)";
         return result;
     }
     for (const Row& source : rows) {

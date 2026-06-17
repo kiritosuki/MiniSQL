@@ -30,4 +30,10 @@ target_link_libraries(minisql PRIVATE minisql_core)
 add_executable(minisql_tests tests/minisql_tests.cpp)
 target_link_libraries(minisql_tests PRIVATE minisql_core)
 
+add_executable(where_tests tests/where_tests.cpp)
+target_link_libraries(where_tests PRIVATE minisql_core)
+
+add_executable(bplustree_delete_tests tests/bplustree_delete_tests.cpp)
+target_link_libraries(bplustree_delete_tests PRIVATE minisql_core)
+
 install(TARGETS minisql minisqld RUNTIME DESTINATION bin)
